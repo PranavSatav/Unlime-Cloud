@@ -1,0 +1,273 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .file-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+        .file-card:hover .file-actions {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Header -->
+    <header class="sticky top-0 z-50 bg-white border-b">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center">
+                    <span class="text-2xl font-semibold text-gray-900">File Manager</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button onclick="document.getElementById('fileInput').click()" 
+                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none">
+                        <i class="fas fa-plus mr-2"></i> New
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Upload Progress -->
+        <div id="uploadProgress" class="hidden mb-6">
+            <div class="bg-white rounded-lg shadow p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center space-x-3">
+                        <i class="fas fa-cloud-upload-alt text-blue-500"></i>
+                        <span id="uploadingFileName" class="text-sm font-medium"></span>
+                    </div>
+                    <span id="progressText" class="text-sm text-gray-600">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2">
+                    <div id="progressBar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Files Section -->
+        <div class="bg-white rounded-lg shadow">
+            <div class="px-6 py-4 border-b border-gray-200">
+                <h2 class="text-lg font-medium text-gray-900">My Files</h2>
+            </div>
+            <div class="p-6">
+                <div id="filesList" class="file-grid">
+                    <!-- Files will be populated here -->
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Hidden File Input -->
+    <input type="file" id="fileInput" class="hidden" />
+
+    <script>
+        const fileTypeIcons = {
+            'image': 'fa-image',
+            'video': 'fa-video',
+            'audio': 'fa-music',
+            'pdf': 'fa-file-pdf',
+            'text': 'fa-file-alt',
+            'spreadsheet': 'fa-file-excel',
+            'presentation': 'fa-file-powerpoint',
+            'document': 'fa-file'
+        };
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffTime = Math.abs(now - date);
+            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+            if (diffDays === 0) {
+                return 'Today ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } else if (diffDays === 1) {
+                return 'Yesterday ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } else {
+                return date.toLocaleDateString([], { 
+                    year: 'numeric', 
+                    month: 'short', 
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            }
+        }
+
+        function createFileCard(file) {
+            const iconClass = fileTypeIcons[file.file_type] || fileTypeIcons.document;
+            const fileCard = document.createElement('div');
+            fileCard.className = 'file-card bg-white rounded-lg border hover:shadow-md transition-all duration-200 relative group';
+            fileCard.innerHTML = `
+                <div class="p-4">
+                    <div class="flex items-start space-x-3">
+                        <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center">
+                            <i class="fas ${iconClass} text-2xl text-gray-400"></i>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-sm font-medium text-gray-900 truncate" title="${file.original_filename}">
+                                ${file.original_filename}
+                            </p>
+                            <p class="text-sm text-gray-500">
+                                ${formatFileSize(file.file_size)}
+                            </p>
+                            <p class="text-xs text-gray-400 mt-1">
+                                ${formatDate(file.upload_date)}
+                            </p>
+                        </div>
+                        <div class="file-actions opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex space-x-2">
+                            <button onclick="downloadFile(${file.id})" class="text-gray-400 hover:text-blue-500" title="Download">
+                                <i class="fas fa-download"></i>
+                            </button>
+                            <button onclick="deleteFile(${file.id})" class="text-gray-400 hover:text-red-500" title="Delete">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return fileCard;
+        }
+
+        function loadFiles() {
+            axios.get('/api/files')
+                .then(response => {
+                    const filesList = document.getElementById('filesList');
+                    filesList.innerHTML = '';
+                    response.data.forEach(file => {
+                        filesList.appendChild(createFileCard(file));
+                    });
+                })
+                .catch(error => {
+                    console.error('Error loading files:', error);
+                    alert('Failed to load files: ' + (error.response?.data?.error || error.message));
+                });
+        }
+
+        function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const uploadProgress = document.getElementById('uploadProgress');
+            const uploadingFileName = document.getElementById('uploadingFileName');
+            
+            uploadProgress.classList.remove('hidden');
+            uploadingFileName.textContent = file.name;
+
+            axios.post('/api/upload', formData, {
+                onUploadProgress: (progressEvent) => {
+                    const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                    progressBar.style.width = percentCompleted + '%';
+                    progressText.textContent = percentCompleted + '%';
+                }
+            })
+            .then(response => {
+                console.log('Upload successful:', response.data);
+                uploadProgress.classList.add('hidden');
+                loadFiles();
+            })
+            .catch(error => {
+                console.error('Upload error:', error);
+                uploadProgress.classList.add('hidden');
+                alert('Upload failed: ' + (error.response?.data?.error || error.message));
+            });
+        }
+
+        function downloadFile(fileId) {
+            window.location.href = `/api/download/${fileId}`;
+        }
+
+        function deleteFile(fileId) {
+            if (confirm('Are you sure you want to delete this file? This will remove it from the Telegram channel as well.')) {
+                axios.delete(`/api/delete/${fileId}`)
+                    .then(response => {
+                        console.log('Delete successful:', response.data);
+                        loadFiles();
+                    })
+                    .catch(error => {
+                        console.error('Delete error:', error);
+                        alert('Delete failed: ' + (error.response?.data?.error || error.message));
+                    });
+            }
+        }
+
+        // Event Listeners
+        document.getElementById('fileInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                if (file.size > 50 * 1024 * 1024) {
+                    alert('File size exceeds 50MB limit');
+                    return;
+                }
+                uploadFile(file);
+            }
+        });
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', loadFiles);
+
+        // Add drag and drop support
+        const dropZone = document.body;
+        
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight(e) {
+            dropZone.classList.add('bg-blue-50');
+        }
+
+        function unhighlight(e) {
+            dropZone.classList.remove('bg-blue-50');
+        }
+
+        dropZone.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const file = dt.files[0];
+            
+            if (file) {
+                if (file.size > 50 * 1024 * 1024) {
+                    alert('File size exceeds 50MB limit');
+                    return;
+                }
+                uploadFile(file);
+            }
+        }
+    </script>
+</body>
+</html>

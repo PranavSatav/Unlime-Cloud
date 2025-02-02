@@ -2,72 +2,253 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Admin Panel - UnLime Cloud</title>
+  <title>UnLime Cloud - Admin Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Tailwind CSS -->
-  <link href="https://cdn.tailwindcss.com" rel="stylesheet">
-  <!-- Axios for API calls -->
   <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
   <style>
-    /* Custom scrollbar styling (optional) */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    :root {
+      --sidebar-bg: #1a1d1f;
+      --main-bg: #f7f7f7;
+      --text-primary: #1a1d1f;
+      --text-secondary: #6f767e;
+      --border-color: #e6e8e9;
+      --status-paid: #fff9e5;
+      --status-delivered: #fff1e9;
+      --status-completed: #edfcf5;
+    }
+
+    body {
+      display: flex;
+      min-height: 100vh;
+      background-color: var(--main-bg);
+    }
+
+    /* Sidebar styles */
+    .sidebar {
+      width: 240px;
+      background-color: var(--sidebar-bg);
+      padding: 20px;
+      color: white;
+    }
+
+    .logo {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 40px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      cursor: pointer;
+      color: #6f767e;
+      text-decoration: none;
+    }
+
+    .nav-item.active {
+      background-color: rgba(255, 255, 255, 0.1);
+      color: white;
+    }
+
+    /* Main content styles */
+    .main-content {
+      flex: 1;
+      padding: 24px;
+      max-width: calc(100vw - 240px);
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+
+    .page-title {
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .filters {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .filter-dropdown {
+      padding: 8px 16px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      background-color: white;
+      cursor: pointer;
+    }
+
+    /* Table styles */
+    .users-table {
+      width: 100%;
+      background: white;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      overflow: hidden;
+    }
+
+    .users-table th {
+      text-align: left;
+      padding: 16px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      border-bottom: 1px solid var(--border-color);
+      background-color: #f9fafb;
+    }
+
+    .users-table td {
+      padding: 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .user-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background-color: #e5e7eb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+
+    .delete-button {
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: none;
+      background-color: #fee2e2;
+      color: #dc2626;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+
+    .delete-button:hover {
+      background-color: #fecaca;
+    }
+
+    /* Custom scrollbar */
     ::-webkit-scrollbar {
       width: 8px;
     }
+    
     ::-webkit-scrollbar-thumb {
       background-color: rgba(0, 0, 0, 0.2);
       border-radius: 4px;
     }
+
+    /* Header user info */
+    .user-profile {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 16px;
+      background-color: white;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+    }
+
+    .storage-info {
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .sidebar {
+        width: 64px;
+        padding: 20px 8px;
+      }
+      
+      .logo span:last-child {
+        display: none;
+      }
+      
+      .nav-item span {
+        display: none;
+      }
+      
+      .main-content {
+        max-width: calc(100vw - 64px);
+      }
+    }
   </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
-  <!-- Navigation Header -->
-  <header class="bg-blue-600 shadow">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="flex items-center justify-between h-16">
-        <div class="flex items-center">
-          <h1 class="text-3xl font-bold text-white">Admin Panel</h1>
-        </div>
-        <div>
-          <a href="/" class="text-white hover:text-gray-200 mr-4">Dashboard</a>
-          <a href="/logout" class="text-white hover:text-gray-200">Logout</a>
-        </div>
-      </div>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="logo">
+      <span>⚡</span>
+      <span>UnLime Cloud</span>
     </div>
-  </header>
+    <nav>
+      <a href="/" class="nav-item">
+        <span>Dashboard</span>
+      </a>
+      <a href="#" class="nav-item active">
+        <span>Users</span>
+      </a>
+      <a href="#" class="nav-item">
+        <span>Settings</span>
+      </a>
+      <a href="/logout" class="nav-item">
+        <span>Logout</span>
+      </a>
+    </nav>
+  </aside>
 
   <!-- Main Content -->
-  <main class="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-    <div class="mb-6">
-      <h2 class="text-2xl font-semibold text-gray-800">Users</h2>
-      <p class="text-gray-600">Manage registered users and view their storage usage.</p>
+  <main class="main-content">
+    <div class="header">
+      <h1 class="page-title">Users Management</h1>
+      <div class="user-profile">
+        <div class="user-avatar">A</div>
+        <div>Admin</div>
+      </div>
     </div>
-    
-    <!-- Users Table Card -->
-    <div class="bg-white shadow rounded-lg overflow-hidden">
-      <div class="px-4 py-5 sm:px-6 bg-gray-50">
-        <h3 class="text-lg leading-6 font-medium text-gray-900">Registered Users</h3>
-      </div>
-      <div class="px-4 py-5 sm:p-6">
-        <div class="overflow-x-auto">
-          <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-100">
-              <tr>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Username</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Storage Used</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="usersTable" class="bg-white divide-y divide-gray-200">
-              <!-- User rows will be inserted here by JavaScript -->
-            </tbody>
-          </table>
-        </div>
-      </div>
+
+    <div class="users-table">
+      <table width="100%">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Username</th>
+            <th>Storage Used</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="usersTable">
+          <!-- User rows will be inserted here by JavaScript -->
+        </tbody>
+      </table>
     </div>
   </main>
-  
-  <!-- JavaScript to load and manage users -->
+
   <script>
     // Load the users from the API and populate the table
     function loadUsers() {
@@ -79,12 +260,18 @@
           
           users.forEach(user => {
             const tr = document.createElement('tr');
+            const initials = user.username.charAt(0).toUpperCase();
             tr.innerHTML = `
-              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${user.id}</td>
-              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${user.username}</td>
-              <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${user.used_formatted}</td>
-              <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                <button onclick="deleteUser(${user.id})" class="text-red-600 hover:text-red-900 focus:outline-none">Delete</button>
+              <td>${user.id}</td>
+              <td>
+                <div class="user-info">
+                  <div class="user-avatar">${initials}</div>
+                  <span>${user.username}</span>
+                </div>
+              </td>
+              <td>${user.used_formatted}</td>
+              <td>
+                <button onclick="deleteUser(${user.id})" class="delete-button">Delete</button>
               </td>
             `;
             usersTable.appendChild(tr);

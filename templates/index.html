@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Force desktop view by setting a fixed width -->
+  <meta name="viewport" content="width=1024, user-scalable=no" />
   <title>UnLime File Manager</title>
   <!-- Tailwind CSS -->
   <link rel="stylesheet" href="https://unpkg.com/tailwindcss@^3/dist/tailwind.min.css">
@@ -89,13 +90,28 @@
       font-size: 1.1rem;
       font-weight: 600;
     }
-    #uploadCard header button {
-      background: transparent;
+    /* Use the cancel-button class for a red filled button with white text */
+    button.cancel-button {
+      background-color: #ef4444;
+      color: #fff;
       border: none;
-      color: #f87171;
-      font-size: 0.9rem;
+      padding: 0.5rem 1rem;
+      border-radius: 0.25rem;
       cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
     }
+    button.cancel-button:hover {
+      background-color: #dc2626;
+    }
+    #uploadCard header button {
+      /* Instead of the default header button style, use our cancel-button style */
+      padding: 0;
+      background: none;
+      border: none;
+    }
+    /* We add the cancel-button class to this button in HTML below */
+    
     #uploadList {
       max-height: 300px;
       overflow-y: auto;
@@ -177,11 +193,10 @@
       font-weight: 600;
     }
     #deletionProgress header button {
-      background: transparent;
+      /* Use our cancel-button style */
+      padding: 0;
+      background: none;
       border: none;
-      color: #f87171;
-      font-size: 0.9rem;
-      cursor: pointer;
     }
     #deletionStatusContainer {
       padding: 0.75rem 1rem;
@@ -189,7 +204,7 @@
       color: #374151;
     }
 
-    /* Button for Clear Filter updated */
+    /* Button for Clear Filter updated to match others */
     .btn-standard {
       background: #fff;
       color: #2563eb;
@@ -202,6 +217,13 @@
     .btn-standard:hover {
       background: #f3f4f6;
       transform: scale(1.05);
+    }
+    
+    /* Force desktop view on mobile by setting a minimum width */
+    @media screen and (max-width: 1024px) {
+      body {
+        min-width: 1024px;
+      }
     }
   </style>
 </head>
@@ -240,7 +262,8 @@
   <div id="uploadCard">
     <header>
       <span class="title">Uploading Files</span>
-      <button id="cancelAllUploads">Cancel All</button>
+      <!-- Cancel All button now uses cancel-button style -->
+      <button id="cancelAllUploads" class="cancel-button">Cancel All</button>
     </header>
     <div id="uploadList"></div>
   </div>
@@ -249,7 +272,8 @@
   <div id="deletionProgress">
     <header>
       <span class="title">Deleting Files</span>
-      <button id="cancelDeletionBtn">Cancel Deletion</button>
+      <!-- Cancel Deletion button with cancel-button style -->
+      <button id="cancelDeletionBtn" class="cancel-button">Cancel Deletion</button>
     </header>
     <div id="deletionStatusContainer">0 file(s) being deleted...</div>
   </div>

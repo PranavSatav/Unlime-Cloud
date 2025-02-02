@@ -1,13 +1,14 @@
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session, flash
 import os
 import requests
-from werkzeug.utils import secure_filename
-from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
 import sqlite3
 import mimetypes
 import io
+from datetime import datetime
 from functools import wraps
+from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
+from PIL import Image  # For thumbnail generation
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
@@ -22,6 +23,8 @@ TELEGRAM_API_URL = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}'
 
 # Create required directories
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+THUMBNAIL_FOLDER = 'thumbnails'
+os.makedirs(THUMBNAIL_FOLDER, exist_ok=True)
 
 def get_file_type_icon(filename):
     mime_type, _ = mimetypes.guess_type(filename)
@@ -57,13 +60,13 @@ def init_db():
                 password TEXT NOT NULL
             )
         ''')
-        # Check if "is_admin" column exists in the users table; if not, add it.
+        # Check if "is_admin" column exists; if not, add it.
         cursor = conn.execute("PRAGMA table_info(users)")
         user_columns = [row["name"] for row in cursor.fetchall()]
         if "is_admin" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
         
-        # Create files table if it doesn't exist
+        # Create files table if it doesn't exist (added thumbnail_filename column)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,14 +79,17 @@ def init_db():
                 file_size INTEGER,
                 file_type TEXT,
                 mime_type TEXT,
+                thumbnail_filename TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         ''')
-        # Check if "user_id" column exists in the files table; if not, add it.
+        # Check if "user_id" and "thumbnail_filename" columns exist; if not, add them.
         cursor = conn.execute("PRAGMA table_info(files)")
         file_columns = [row["name"] for row in cursor.fetchall()]
         if "user_id" not in file_columns:
             conn.execute("ALTER TABLE files ADD COLUMN user_id INTEGER")
+        if "thumbnail_filename" not in file_columns:
+            conn.execute("ALTER TABLE files ADD COLUMN thumbnail_filename TEXT")
         
         # Create a default admin user if it doesn't exist
         cur = conn.execute("SELECT * FROM users WHERE username = ?", ("admin",))
@@ -202,66 +208,93 @@ def get_storage():
 def upload_file():
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
+    files = request.files.getlist('file')
+    if not files:
         return jsonify({'error': 'No file selected'}), 400
 
-    try:
-        # Save file locally
-        filename = secure_filename(file.filename)
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        saved_filename = f"{timestamp}_{filename}"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], saved_filename)
-        file.save(filepath)
+    responses = []
+    for file in files:
+        if file.filename == '':
+            continue
+        try:
+            filename = secure_filename(file.filename)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S%f')
+            saved_filename = f"{timestamp}_{filename}"
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], saved_filename)
+            file.save(filepath)
+            file_size = os.path.getsize(filepath)
+            mime_type, _ = mimetypes.guess_type(filename)
+            file_type = get_file_type_icon(filename)
+            
+            # Generate low-resolution thumbnail for images
+            thumbnail_filename = None
+            if mime_type and mime_type.startswith('image'):
+                try:
+                    with Image.open(filepath) as img:
+                        img.thumbnail((200, 200))
+                        thumbnail_filename = f"thumb_{saved_filename}"
+                        thumbnail_path = os.path.join(THUMBNAIL_FOLDER, thumbnail_filename)
+                        img.save(thumbnail_path, optimize=True, quality=50)
+                except Exception as thumb_err:
+                    print(f"Thumbnail generation failed for {filename}: {thumb_err}")
 
-        file_size = os.path.getsize(filepath)
-        mime_type, _ = mimetypes.guess_type(filename)
-        file_type = get_file_type_icon(filename)
-
-        # Upload to Telegram
-        with open(filepath, 'rb') as f:
-            files_data = {'document': f}
-            caption = f"📄 File: {filename}\n📦 Size: {file_size/1024/1024:.2f}MB\n🔤 Type: {mime_type or 'Unknown'}"
-            response = requests.post(
-                f'{TELEGRAM_API_URL}/sendDocument',
-                data={'chat_id': TELEGRAM_CHANNEL_ID, 'caption': caption},
-                files=files_data
-            )
-
-        if response.status_code != 200:
-            os.remove(filepath)
-            return jsonify({'error': 'Failed to upload to Telegram'}), 500
-
-        result = response.json()['result']
-        telegram_file_id = result['document']['file_id']
-        telegram_message_id = result['message_id']
-
-        with get_db() as db:
-            db.execute('''
-                INSERT INTO files (
-                    user_id, filename, original_filename, telegram_file_id, telegram_message_id,
-                    upload_date, file_size, file_type, mime_type
+            # Upload file to Telegram
+            with open(filepath, 'rb') as f:
+                files_data = {'document': f}
+                caption = f"📄 File: {filename}\n📦 Size: {file_size/1024/1024:.2f}MB\n🔤 Type: {mime_type or 'Unknown'}"
+                response = requests.post(
+                    f'{TELEGRAM_API_URL}/sendDocument',
+                    data={'chat_id': TELEGRAM_CHANNEL_ID, 'caption': caption},
+                    files=files_data
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                session['user_id'], saved_filename, filename, telegram_file_id, telegram_message_id,
-                datetime.now().isoformat(), file_size, file_type, mime_type
-            ))
-
-        os.remove(filepath)
-
-        return jsonify({
-            'message': 'File uploaded successfully',
-            'filename': filename,
-            'size': file_size,
-            'type': file_type,
-            'mime_type': mime_type
-        })
-
-    except Exception as e:
-        if os.path.exists(filepath):
+            if response.status_code != 200:
+                os.remove(filepath)
+                responses.append({'error': f'Failed to upload {filename} to Telegram'})
+                continue
+            result = response.json()['result']
+            telegram_file_id = result['document']['file_id']
+            telegram_message_id = result['message_id']
+            with get_db() as db:
+                db.execute('''
+                    INSERT INTO files (
+                        user_id, filename, original_filename, telegram_file_id, telegram_message_id,
+                        upload_date, file_size, file_type, mime_type, thumbnail_filename
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    session['user_id'], saved_filename, filename, telegram_file_id, telegram_message_id,
+                    datetime.now().isoformat(), file_size, file_type, mime_type, thumbnail_filename
+                ))
             os.remove(filepath)
+            responses.append({
+                'message': f'{filename} uploaded successfully',
+                'filename': filename,
+                'size': file_size,
+                'type': file_type,
+                'mime_type': mime_type
+            })
+        except Exception as e:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            responses.append({'error': f'Error uploading {filename}: {str(e)}'})
+    if any('error' in resp for resp in responses):
+        return jsonify(responses), 207  # Multi-status if some errors occurred
+    return jsonify(responses)
+
+@app.route('/api/thumbnail/<int:file_id>')
+@login_required
+def get_thumbnail(file_id):
+    try:
+        with get_db() as db:
+            file = db.execute('SELECT * FROM files WHERE id = ? AND user_id = ?', (file_id, session['user_id'])).fetchone()
+            if not file:
+                return jsonify({'error': 'Thumbnail not found'}), 404
+            if file['thumbnail_filename']:
+                thumbnail_path = os.path.join(THUMBNAIL_FOLDER, file['thumbnail_filename'])
+                if os.path.exists(thumbnail_path):
+                    return send_file(thumbnail_path, mimetype=file['mime_type'])
+            return redirect(url_for('download_file', file_id=file_id))
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/download/<int:file_id>')
@@ -277,27 +310,12 @@ def download_file(file_id):
                 f'{TELEGRAM_API_URL}/getFile',
                 params={'file_id': file['telegram_file_id']}
             )
-            
             if response.status_code != 200:
                 return jsonify({'error': 'Failed to get file from Telegram'}), 500
 
             file_path = response.json()['result']['file_path']
             file_url = f'https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}'
-            
-            response = requests.get(file_url)
-            if response.status_code != 200:
-                return jsonify({'error': 'Failed to download file from Telegram'}), 500
-
-            file_data = io.BytesIO(response.content)
-            file_data.seek(0)
-
-            return send_file(
-                file_data,
-                download_name=file['original_filename'],
-                as_attachment=True,
-                mimetype=file['mime_type']
-            )
-
+            return redirect(file_url)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -317,21 +335,46 @@ def delete_file(file_id):
                     'message_id': file['telegram_message_id']
                 }
             )
-
             db.execute('DELETE FROM files WHERE id = ?', (file_id,))
+            if file['thumbnail_filename']:
+                thumbnail_path = os.path.join(THUMBNAIL_FOLDER, file['thumbnail_filename'])
+                if os.path.exists(thumbnail_path):
+                    os.remove(thumbnail_path)
             if response.status_code != 200:
-                print(f"Warning: Failed to delete message from Telegram: {response.text}")
-
+                print(f"Warning: Failed to delete Telegram message: {response.text}")
         return jsonify({'message': 'File deleted successfully'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
+@app.route('/api/delete_many', methods=['POST'])
+@login_required
+def delete_many_files():
+    try:
+        file_ids = request.json.get('file_ids')
+        if not file_ids:
+            return jsonify({'error': 'No file ids provided'}), 400
+
+        for file_id in file_ids:
+            with get_db() as db:
+                file = db.execute('SELECT * FROM files WHERE id = ? AND user_id = ?', (file_id, session['user_id'])).fetchone()
+                if file:
+                    response = requests.post(
+                        f'{TELEGRAM_API_URL}/deleteMessage',
+                        data={'chat_id': TELEGRAM_CHANNEL_ID, 'message_id': file['telegram_message_id']}
+                    )
+                    db.execute('DELETE FROM files WHERE id = ?', (file_id,))
+                    if file['thumbnail_filename']:
+                        thumbnail_path = os.path.join(THUMBNAIL_FOLDER, file['thumbnail_filename'])
+                        if os.path.exists(thumbnail_path):
+                            os.remove(thumbnail_path)
+        return jsonify({'message': 'Selected files deleted successfully'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 # ---------------------------
-# Admin Endpoints
+# Admin Endpoints (unchanged)
 # ---------------------------
 def format_bytes(size):
-    # Returns a human-readable string
     if size < 1024:
         return f"{size} Bytes"
     elif size < 1024 * 1024:
@@ -379,7 +422,6 @@ def delete_user(user_id):
             if not user:
                 return jsonify({'error': 'User not found'}), 404
 
-            # Get all files for this user and remove them from Telegram
             files = db.execute("SELECT * FROM files WHERE user_id = ?", (user_id,)).fetchall()
             for file in files:
                 resp = requests.post(
@@ -390,9 +432,7 @@ def delete_user(user_id):
                     }
                 )
                 if resp.status_code != 200:
-                    print(f"Warning: Failed to delete Telegram message {file['telegram_message_id']}: {resp.text}")
-
-            # Delete files from database and then delete the user
+                    print(f"Warning: Failed to delete Telegram message: {resp.text}")
             db.execute("DELETE FROM files WHERE user_id = ?", (user_id,))
             db.execute("DELETE FROM users WHERE id = ?", (user_id,))
         return jsonify({'message': 'User and associated files deleted successfully'})

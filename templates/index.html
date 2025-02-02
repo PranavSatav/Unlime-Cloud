@@ -3,93 +3,312 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>File Manager</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <title>UnLime File Manager</title>
+  <!-- Tailwind CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/tailwindcss@^3/dist/tailwind.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
+  <!-- Font Awesome -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
   <style>
+    /* Toast Styles */
+    #toastContainer { 
+      z-index: 9999; 
+      position: fixed; 
+      top: 1rem; 
+      right: 1rem; 
+    }
+    .toast {
+      min-width: 250px;
+      padding: 1rem;
+      border-radius: 0.5rem;
+      color: white;
+      opacity: 0;
+      transition: opacity 0.5s ease-in-out;
+      margin-bottom: 0.5rem;
+    }
+    .toast.show { opacity: 1; }
+
+    /* File Grid & Card */
     .file-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
       gap: 1rem;
     }
-    .file-card:hover .file-actions {
-      opacity: 1;
+    .file-card {
+      background: #ffffff;
+      border-radius: 0.25rem;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      overflow: hidden;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      cursor: pointer;
+      position: relative;
+    }
+    .file-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 8px rgba(0,0,0,0.12);
+    }
+    .file-card.selected .multi-select-check {
+      display: block;
+    }
+    .multi-select-check {
+      position: absolute;
+      top: 0.5rem;
+      left: 0.5rem;
+      background-color: rgba(59,130,246,0.8);
+      color: white;
+      border-radius: 9999px;
+      padding: 0.25rem;
+      display: none;
+    }
+    /* Multi-select Toolbar */
+    #multiSelectToolbar { z-index: 1100; }
+
+    /* Consolidated Upload Card */
+    #uploadCard {
+      z-index: 1050;
+      position: fixed;
+      bottom: 1rem;
+      right: 1rem;
+      width: 420px;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 0.5rem;
+      box-shadow: 0 6px 8px rgba(0,0,0,0.1);
+      overflow: hidden;
+      display: none;
+    }
+    #uploadCard header {
+      background: linear-gradient(to right, #2563eb, #4f46e5);
+      color: #fff;
+      padding: 0.75rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #uploadCard header .title {
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+    #uploadCard header button {
+      background: transparent;
+      border: none;
+      color: #f87171;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    #uploadList {
+      max-height: 300px;
+      overflow-y: auto;
+      padding: 0.75rem 1rem;
+    }
+    /* Hide scrollbar */
+    #uploadList::-webkit-scrollbar {
+      display: none;
+    }
+    #uploadList {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+    .upload-item {
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #e5e7eb;
+      transition: opacity 0.3s ease;
+    }
+    .upload-item:last-child {
+      border-bottom: none;
+    }
+    .upload-item .file-name {
+      font-size: 0.95rem;
+      margin-bottom: 0.25rem;
+      font-weight: 500;
+    }
+    .upload-item .progress-container {
+      background: #e5e7eb;
+      height: 4px;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .upload-item .progress-bar {
+      height: 4px;
+      background: #3b82f6;
+      width: 0%;
+      border-radius: 2px;
+      transition: width 0.2s ease;
+    }
+    .upload-item .progress-text {
+      text-align: right;
+      font-size: 0.75rem;
+      color: #6b7280;
+      margin-top: 0.25rem;
+    }
+    .upload-item.completed .progress-text::before {
+      content: "\f00c";
+      font-family: "Font Awesome 6 Free";
+      font-weight: 900;
+      margin-right: 0.25rem;
+      color: #10b981;
+    }
+
+    /* Deletion Card (Same UI as Upload Card) */
+    #deletionProgress {
+      z-index: 1050;
+      position: fixed;
+      bottom: 5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 420px;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 0.5rem;
+      box-shadow: 0 6px 8px rgba(0,0,0,0.1);
+      overflow: hidden;
+      display: none;
+    }
+    #deletionProgress header {
+      background: linear-gradient(to right, #2563eb, #4f46e5);
+      color: #fff;
+      padding: 0.75rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #deletionProgress header .title {
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+    #deletionProgress header button {
+      background: transparent;
+      border: none;
+      color: #f87171;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    #deletionStatusContainer {
+      padding: 0.75rem 1rem;
+      font-size: 0.95rem;
+      color: #374151;
+    }
+
+    /* Button for Clear Filter updated */
+    .btn-standard {
+      background: #fff;
+      color: #2563eb;
+      font-weight: 600;
+      padding: 0.5rem 1rem;
+      border-radius: 0.25rem;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
+    .btn-standard:hover {
+      background: #f3f4f6;
+      transform: scale(1.05);
     }
   </style>
 </head>
-<body class="bg-gray-50">
+<body class="bg-gray-100">
+  <!-- Toast Container -->
+  <div id="toastContainer"></div>
+
   <!-- Header -->
-  <header class="sticky top-0 z-50 bg-white border-b">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="flex justify-between items-center h-16">
-        <div class="flex items-center space-x-4">
-          <span class="text-2xl font-semibold text-gray-900">UnLime 📁</span>
-          <span class="text-sm text-gray-600">Welcome, {{ username }}!</span>
-        </div>
-        <div class="flex items-center space-x-4">
-          {% if session.get('is_admin') == 1 %}
-          <a href="{{ url_for('admin_panel') }}" class="text-blue-600 hover:underline">Admin Panel</a>
-          {% endif %}
-          <a href="{{ url_for('logout') }}" class="text-blue-600 hover:underline">Logout</a>
-          <button onclick="document.getElementById('fileInput').click()" 
-                  class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none">
-            <i class="fas fa-plus mr-2"></i> New
-          </button>
-        </div>
+  <header class="bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between py-4">
+      <div>
+        <h1 class="text-2xl font-bold">UnLime File Manager</h1>
+        <p class="text-sm">Welcome, {{ username }}!</p>
+      </div>
+      <div class="flex space-x-4 items-center">
+        {% if session.get('is_admin') == 1 %}
+        <a href="{{ url_for('admin_panel') }}" class="bg-white text-blue-600 font-semibold py-2 px-4 rounded shadow hover:bg-gray-100 transition transform hover:scale-105">
+          Admin Panel
+        </a>
+        {% endif %}
+        <a href="{{ url_for('logout') }}" class="bg-white text-blue-600 font-semibold py-2 px-4 rounded shadow hover:bg-gray-100 transition transform hover:scale-105">
+          Logout
+        </a>
+        <button onclick="enterMultiSelectModeManual()" class="bg-white text-blue-600 font-semibold py-2 px-4 rounded shadow hover:bg-gray-100 transition transform hover:scale-105">
+          Multi-Select
+        </button>
+        <button onclick="document.getElementById('fileInput').click()"
+          class="bg-white text-blue-600 font-semibold py-2 px-4 rounded shadow hover:bg-gray-100 transition transform hover:scale-105">
+          <i class="fas fa-plus mr-2"></i> Upload Files
+        </button>
       </div>
     </div>
   </header>
 
+  <!-- Consolidated Upload Card -->
+  <div id="uploadCard">
+    <header>
+      <span class="title">Uploading Files</span>
+      <button id="cancelAllUploads">Cancel All</button>
+    </header>
+    <div id="uploadList"></div>
+  </div>
+
+  <!-- Deletion Card (Same UI as Upload Card) -->
+  <div id="deletionProgress">
+    <header>
+      <span class="title">Deleting Files</span>
+      <button id="cancelDeletionBtn">Cancel Deletion</button>
+    </header>
+    <div id="deletionStatusContainer">0 file(s) being deleted...</div>
+  </div>
+
+  <!-- Multi-select Toolbar -->
+  <div id="multiSelectToolbar" class="hidden fixed bottom-0 left-0 right-0 bg-gray-800 text-white p-4 flex justify-between items-center">
+    <span id="selectedCount">0 Selected</span>
+    <div>
+      <button onclick="selectAllFiles()" class="bg-white text-blue-600 font-semibold py-2 px-4 rounded shadow hover:bg-gray-100 transition transform hover:scale-105 mr-4">
+        Select All
+      </button>
+      <button onclick="startDeletion()" class="bg-white text-blue-600 font-semibold py-2 px-4 rounded shadow hover:bg-gray-100 transition transform hover:scale-105 mr-4">
+        Delete Selected
+      </button>
+      <button onclick="exitMultiSelect()" class="bg-white text-blue-600 font-semibold py-2 px-4 rounded shadow hover:bg-gray-100 transition transform hover:scale-105">
+        Cancel
+      </button>
+    </div>
+  </div>
+
+  <!-- Search & Sort Controls -->
+  <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-wrap gap-4 items-center">
+    <input type="text" id="searchInput" placeholder="Search files..." class="border rounded px-3 py-2 focus:outline-none focus:ring w-full max-w-xs" oninput="applyFilters()">
+    <select id="sortSelect" class="border rounded px-3 py-2 focus:outline-none focus:ring" onchange="applyFilters()">
+      <option value="">Sort/Filter by type</option>
+      <option value="image">Images (.jpg, .png, etc.)</option>
+      <option value="video">Videos</option>
+      <option value="audio">Audio</option>
+      <option value="pdf">PDF</option>
+      <option value="zip">ZIP</option>
+      <option value="text">Text</option>
+    </select>
+    <button onclick="clearFilters()" class="btn-standard">
+      Clear Filter
+    </button>
+  </div>
+
   <!-- Main Content -->
-  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <main class="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8">
     <!-- Storage Usage -->
-    <div id="storageUsage" class="mb-4 text-gray-700"></div>
-
-    <!-- Upload Progress -->
-    <div id="uploadProgress" class="hidden mb-6">
-      <div class="bg-white rounded-lg shadow p-4">
-        <div class="flex items-center justify-between mb-2">
-          <div class="flex items-center space-x-3">
-            <i class="fas fa-cloud-upload-alt text-blue-500"></i>
-            <span id="uploadingFileName" class="text-sm font-medium"></span>
-          </div>
-          <span id="progressText" class="text-sm text-gray-600">0%</span>
-        </div>
-        <div class="w-full bg-gray-200 rounded-full h-2">
-          <div id="progressBar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
-        </div>
-      </div>
-    </div>
-
+    <div id="storageUsage" class="mb-6 text-gray-700 font-medium text-lg"></div>
     <!-- Files Section -->
-    <div class="bg-white rounded-lg shadow">
+    <section class="bg-white rounded shadow overflow-hidden">
       <div class="px-6 py-4 border-b border-gray-200">
-        <h2 class="text-lg font-medium text-gray-900">My Files</h2>
+        <h2 class="text-xl font-semibold text-gray-800">My Files</h2>
       </div>
-      <div class="p-6">
-        <div id="filesList" class="file-grid">
-          <!-- Files will be populated here -->
-        </div>
+      <div class="p-6" id="filesList">
+        <!-- Grouped files will be rendered here -->
       </div>
-    </div>
+    </section>
   </main>
 
   <!-- Hidden File Input -->
-  <input type="file" id="fileInput" class="hidden" />
+  <input type="file" id="fileInput" class="hidden" multiple />
 
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
   <script>
-    const fileTypeIcons = {
-      image: 'fa-image',
-      video: 'fa-video',
-      audio: 'fa-music',
-      pdf: 'fa-file-pdf',
-      text: 'fa-file-alt',
-      spreadsheet: 'fa-file-excel',
-      presentation: 'fa-file-powerpoint',
-      document: 'fa-file'
-    };
-
+    // Utility: Format file sizes
     function formatFileSize(bytes) {
       if (bytes === 0) return '0 Bytes';
       const k = 1024;
@@ -98,74 +317,275 @@
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
-    function formatDate(dateString) {
-      const date = new Date(dateString);
-      const now = new Date();
-      const diffTime = Math.abs(now - date);
-      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    let allFiles = [];
+    let multiSelectMode = false;
+    let selectedFiles = new Set();
+    let deletionCancelled = false;
 
-      if (diffDays === 0) {
-        return 'Today ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      } else if (diffDays === 1) {
-        return 'Yesterday ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Toast notifications
+    function showToast(message, type = 'success') {
+      const toastContainer = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast ${type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : 'bg-gray-500'} shadow-lg`;
+      toast.textContent = message;
+      toastContainer.appendChild(toast);
+      setTimeout(() => toast.classList.add('show'), 100);
+      setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 500);
+      }, 3000);
+    }
+
+    // Create file card
+    function createFileCard(file) {
+      const card = document.createElement('div');
+      card.className = 'file-card';
+      card.dataset.fileId = file.id;
+      let thumbnailHTML = `<div class="flex items-center justify-center h-24 bg-gray-100">
+                             <i class="fas fa-file text-3xl text-gray-400"></i>
+                           </div>`;
+      if (file.mime_type && file.mime_type.startsWith('image')) {
+        thumbnailHTML = `<img src="/api/thumbnail/${file.id}" alt="${file.original_filename}" class="object-cover w-full h-24">`;
+      }
+      card.innerHTML = `
+        ${thumbnailHTML}
+        <div class="p-2 text-center">
+          <p class="text-sm font-medium text-gray-800 truncate" title="${file.original_filename}">${file.original_filename}</p>
+          <p class="text-xs text-gray-500">${formatFileSize(file.file_size)}</p>
+          <p class="text-xs text-gray-400">${new Date(file.upload_date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+          <div class="mt-2 flex justify-center gap-2">
+            <button onclick="downloadFile(event, ${file.id})" class="p-1 bg-blue-50 hover:bg-blue-100 rounded" title="Download">
+              <i class="fas fa-download text-blue-600"></i>
+            </button>
+            <button onclick="deleteFile(event, ${file.id})" class="p-1 bg-red-50 hover:bg-red-100 rounded" title="Delete">
+              <i class="fas fa-trash text-red-600"></i>
+            </button>
+          </div>
+        </div>
+        <div class="multi-select-check absolute top-2 left-2">
+          <i class="fas fa-check"></i>
+        </div>
+      `;
+      let pressTimer;
+      card.addEventListener('mousedown', () => {
+        if (multiSelectMode) return;
+        pressTimer = setTimeout(() => {
+          enterMultiSelectMode();
+          toggleSelection(card);
+        }, 800);
+      });
+      card.addEventListener('mouseup', () => clearTimeout(pressTimer));
+      card.addEventListener('click', (e) => {
+        if (multiSelectMode) {
+          toggleSelection(card);
+          e.stopPropagation();
+        }
+      });
+      return card;
+    }
+
+    function toggleSelection(card) {
+      const fileId = card.dataset.fileId;
+      if (selectedFiles.has(fileId)) {
+        selectedFiles.delete(fileId);
+        card.classList.remove('selected');
       } else {
-        return date.toLocaleDateString([], {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
+        selectedFiles.add(fileId);
+        card.classList.add('selected');
+      }
+      document.getElementById('selectedCount').textContent = selectedFiles.size + ' Selected';
+    }
+
+    function enterMultiSelectMode() {
+      multiSelectMode = true;
+      document.getElementById('multiSelectToolbar').classList.remove('hidden');
+    }
+
+    function enterMultiSelectModeManual() {
+      if (!multiSelectMode) { enterMultiSelectMode(); }
+    }
+
+    function exitMultiSelect() {
+      multiSelectMode = false;
+      selectedFiles.clear();
+      document.getElementById('multiSelectToolbar').classList.add('hidden');
+      document.querySelectorAll('.file-card').forEach(card => card.classList.remove('selected'));
+    }
+
+    function selectAllFiles() {
+      allFiles.forEach(file => {
+        const card = document.querySelector(`.file-card[data-file-id="${file.id}"]`);
+        if (card && !selectedFiles.has(String(file.id))) {
+          selectedFiles.add(file.id);
+          card.classList.add('selected');
+        }
+      });
+      document.getElementById('selectedCount').textContent = selectedFiles.size + ' Selected';
+    }
+
+    // Consolidated Concurrent Upload with Immediate UI Update
+    function uploadFiles(files) {
+      const uploadCard = document.getElementById('uploadCard');
+      const uploadList = document.getElementById('uploadList');
+      uploadList.innerHTML = '';
+      uploadCard.style.display = 'block';
+      
+      let fileArray = Array.from(files);
+      let cancelled = false;
+      let cancelTokens = [];
+      
+      document.getElementById('cancelAllUploads').onclick = function() {
+        cancelled = true;
+        cancelTokens.forEach(ct => ct.cancel('Upload cancelled by user.'));
+      };
+      
+      let uploadPromises = fileArray.map(file => {
+        let uploadItem = document.createElement('div');
+        uploadItem.className = 'upload-item';
+        uploadItem.innerHTML = `
+          <div class="file-name">${file.name}</div>
+          <div class="progress-container">
+            <div class="progress-bar" style="width: 0%"></div>
+          </div>
+          <div class="progress-text">0%</div>
+        `;
+        uploadList.appendChild(uploadItem);
+        
+        let cancelTokenSource = axios.CancelToken.source();
+        cancelTokens.push(cancelTokenSource);
+        
+        let formData = new FormData();
+        formData.append('file', file);
+        
+        return axios.post('/api/upload', formData, {
+          cancelToken: cancelTokenSource.token,
+          onUploadProgress: (progressEvent) => {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            uploadItem.querySelector('.progress-bar').style.width = percentCompleted + '%';
+            uploadItem.querySelector('.progress-text').textContent = percentCompleted + '%';
+          }
+        })
+        .then(response => {
+          loadFiles();
+          loadStorageUsage();
+          uploadItem.classList.add('completed');
+          setTimeout(() => { uploadItem.remove(); }, 300);
+        })
+        .catch(error => {
+          if (axios.isCancel(error)) {
+            uploadItem.querySelector('.progress-text').textContent = 'Cancelled';
+          } else {
+            uploadItem.querySelector('.progress-text').textContent = 'Error';
+          }
+          setTimeout(() => { uploadItem.remove(); }, 300);
         });
+      });
+      
+      Promise.allSettled(uploadPromises).then(() => {
+        uploadCard.style.display = 'none';
+        if (cancelled) {
+          showToast('Upload cancelled', 'error');
+        } else {
+          showToast('All files uploaded successfully!', 'success');
+        }
+        loadFiles();
+        loadStorageUsage();
+      });
+    }
+
+    // Deletion functions with UI similar to Upload Card
+    function startDeletion() {
+      if (selectedFiles.size === 0) {
+        showToast('No files selected', 'error');
+        return;
+      }
+      deletionCancelled = false;
+      const deletionCard = document.getElementById('deletionProgress');
+      const deletionStatusContainer = document.getElementById('deletionStatusContainer');
+      deletionCard.style.display = 'block';
+      const filesToDelete = Array.from(selectedFiles);
+      let total = filesToDelete.length;
+      deletionStatusContainer.textContent = `${total} file(s) being deleted...`;
+      const deletionPromises = filesToDelete.map(fileId => {
+        return axios.delete(`/api/delete/${fileId}`)
+          .then(response => {
+            total--;
+            deletionStatusContainer.textContent = `${total} file(s) remaining...`;
+          })
+          .catch(error => {
+            total--;
+            deletionStatusContainer.textContent = `${total} file(s) remaining...`;
+          });
+      });
+      Promise.allSettled(deletionPromises).then(() => {
+        if (!deletionCancelled) {
+          showToast('Selected files deleted successfully!', 'success');
+        }
+        deletionCard.style.display = 'none';
+        exitMultiSelect();
+        loadFiles();
+        loadStorageUsage();
+      });
+    }
+
+    function cancelDeletion() {
+      deletionCancelled = true;
+      showToast('Deletion cancelled', 'error');
+      document.getElementById('deletionProgress').style.display = 'none';
+    }
+
+    function downloadFile(event, fileId) {
+      event.stopPropagation();
+      window.location.href = `/api/download/${fileId}`;
+    }
+
+    function deleteFile(event, fileId) {
+      event.stopPropagation();
+      if (confirm('Are you sure you want to delete this file?')) {
+        axios.delete(`/api/delete/${fileId}`)
+          .then(response => {
+            showToast(response.data.message, 'success');
+            loadFiles();
+            loadStorageUsage();
+          })
+          .catch(error => {
+            showToast('Delete failed: ' + (error.response?.data?.error || error.message), 'error');
+          });
       }
     }
 
-    function createFileCard(file) {
-      const iconClass = fileTypeIcons[file.file_type] || fileTypeIcons.document;
-      const fileCard = document.createElement('div');
-      fileCard.className = 'file-card bg-white rounded-lg border hover:shadow-md transition-all duration-200 relative group';
-      fileCard.innerHTML = `
-        <div class="p-4">
-          <div class="flex items-start space-x-3">
-            <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center">
-              <i class="fas ${iconClass} text-2xl text-gray-400"></i>
-            </div>
-            <div class="flex-1 min-w-0">
-              <p class="text-sm font-medium text-gray-900 truncate" title="${file.original_filename}">
-                ${file.original_filename}
-              </p>
-              <p class="text-sm text-gray-500">
-                ${formatFileSize(file.file_size)}
-              </p>
-              <p class="text-xs text-gray-400 mt-1">
-                ${formatDate(file.upload_date)}
-              </p>
-            </div>
-            <div class="file-actions opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex space-x-2">
-              <button onclick="downloadFile(${file.id})" class="text-gray-400 hover:text-blue-500" title="Download">
-                <i class="fas fa-download"></i>
-              </button>
-              <button onclick="deleteFile(${file.id})" class="text-gray-400 hover:text-red-500" title="Delete">
-                <i class="fas fa-trash"></i>
-              </button>
-            </div>
-          </div>
-        </div>
-      `;
-      return fileCard;
+    // Filtering and Sorting
+    function renderFiles(filesArray) {
+      const filesList = document.getElementById('filesList');
+      filesList.innerHTML = '';
+      const grouped = {};
+      filesArray.forEach(file => {
+        const dateKey = new Date(file.upload_date).toLocaleDateString();
+        if (!grouped[dateKey]) grouped[dateKey] = [];
+        grouped[dateKey].push(file);
+      });
+      Object.keys(grouped).sort((a, b) => new Date(b) - new Date(a)).forEach(dateKey => {
+        const groupDiv = document.createElement('div');
+        groupDiv.className = 'mb-6';
+        groupDiv.innerHTML = `<h3 class="text-lg font-semibold text-gray-700 mb-4">${dateKey}</h3>`;
+        const grid = document.createElement('div');
+        grid.className = 'file-grid';
+        grouped[dateKey].forEach(file => {
+          grid.appendChild(createFileCard(file));
+        });
+        groupDiv.appendChild(grid);
+        filesList.appendChild(groupDiv);
+      });
     }
 
     function loadFiles() {
       axios.get('/api/files')
         .then(response => {
-          const filesList = document.getElementById('filesList');
-          filesList.innerHTML = '';
-          response.data.forEach(file => {
-            filesList.appendChild(createFileCard(file));
-          });
+          allFiles = response.data;
+          applyFilters();
         })
         .catch(error => {
-          console.error('Error loading files:', error);
-          alert('Failed to load files: ' + (error.response?.data?.error || error.message));
+          showToast('Failed to load files: ' + (error.response?.data?.error || error.message), 'error');
         });
     }
 
@@ -173,83 +593,41 @@
       axios.get('/api/storage')
         .then(response => {
           const used = response.data.used_bytes;
-          const k = 1024;
-          let text = '';
-          if (used < k) {
-            text = `${used} Bytes used of unlimited`;
-          } else if (used < k * k) {
-            text = `${(used/k).toFixed(2)} KB used of unlimited`;
-          } else if (used < k * k * k) {
-            text = `${(used/(k*k)).toFixed(2)} MB used of unlimited`;
-          } else {
-            text = `${(used/(k*k*k)).toFixed(2)} GB used of unlimited`;
-          }
-          document.getElementById('storageUsage').textContent = text;
+          document.getElementById('storageUsage').textContent = `Total Storage used: ${formatFileSize(used)}`;
         })
-        .catch(error => {
-          console.error('Error loading storage usage:', error);
-        });
+        .catch(error => console.error('Error loading storage usage:', error));
     }
 
-    function uploadFile(file) {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const progressBar = document.getElementById('progressBar');
-      const progressText = document.getElementById('progressText');
-      const uploadProgress = document.getElementById('uploadProgress');
-      const uploadingFileName = document.getElementById('uploadingFileName');
-
-      uploadProgress.classList.remove('hidden');
-      uploadingFileName.textContent = file.name;
-
-      axios.post('/api/upload', formData, {
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          progressBar.style.width = percentCompleted + '%';
-          progressText.textContent = percentCompleted + '%';
-        }
-      })
-      .then(response => {
-        console.log('Upload successful:', response.data);
-        uploadProgress.classList.add('hidden');
-        loadFiles();
-        loadStorageUsage();
-      })
-      .catch(error => {
-        console.error('Upload error:', error);
-        uploadProgress.classList.add('hidden');
-        alert('Upload failed: ' + (error.response?.data?.error || error.message));
-      });
-    }
-
-    function downloadFile(fileId) {
-      window.location.href = `/api/download/${fileId}`;
-    }
-
-    function deleteFile(fileId) {
-      if (confirm('Are you sure you want to delete this file? This will remove it from the Telegram channel as well.')) {
-        axios.delete(`/api/delete/${fileId}`)
-          .then(response => {
-            console.log('Delete successful:', response.data);
-            loadFiles();
-            loadStorageUsage();
-          })
-          .catch(error => {
-            console.error('Delete error:', error);
-            alert('Delete failed: ' + (error.response?.data?.error || error.message));
-          });
+    function applyFilters() {
+      let filtered = allFiles.slice();
+      const searchTerm = document.getElementById('searchInput').value.trim().toLowerCase();
+      const sortFilter = document.getElementById('sortSelect').value;
+      if (searchTerm) {
+        filtered = filtered.filter(file => file.original_filename.toLowerCase().includes(searchTerm));
       }
+      if (sortFilter) {
+        filtered = filtered.filter(file => file.mime_type && file.mime_type.includes(sortFilter));
+      }
+      renderFiles(filtered);
     }
 
+    function clearFilters() {
+      document.getElementById('searchInput').value = '';
+      document.getElementById('sortSelect').value = '';
+      applyFilters();
+    }
+
+    // Event listeners for file input and drag/drop
     document.getElementById('fileInput').addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (file) {
-        if (file.size > 50 * 1024 * 1024) {
-          alert('File size exceeds 50MB limit');
-          return;
+      const files = e.target.files;
+      if (files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          if (files[i].size > 50 * 1024 * 1024) {
+            showToast('One or more files exceed the 50MB limit', 'error');
+            return;
+          }
         }
-        uploadFile(file);
+        uploadFiles(files);
       }
     });
 
@@ -260,36 +638,27 @@
 
     const dropZone = document.body;
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-      dropZone.addEventListener(eventName, preventDefaults, false);
+      dropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
     });
-    function preventDefaults (e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
     ['dragenter', 'dragover'].forEach(eventName => {
-      dropZone.addEventListener(eventName, highlight, false);
+      dropZone.addEventListener(eventName, () => dropZone.classList.add('bg-blue-50'), false);
     });
     ['dragleave', 'drop'].forEach(eventName => {
-      dropZone.addEventListener(eventName, unhighlight, false);
+      dropZone.addEventListener(eventName, () => dropZone.classList.remove('bg-blue-50'), false);
     });
-    function highlight(e) {
-      dropZone.classList.add('bg-blue-50');
-    }
-    function unhighlight(e) {
-      dropZone.classList.remove('bg-blue-50');
-    }
-    dropZone.addEventListener('drop', handleDrop, false);
-    function handleDrop(e) {
+    dropZone.addEventListener('drop', (e) => {
       const dt = e.dataTransfer;
-      const file = dt.files[0];
-      if (file) {
-        if (file.size > 50 * 1024 * 1024) {
-          alert('File size exceeds 50MB limit');
-          return;
+      const files = dt.files;
+      if (files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          if (files[i].size > 50 * 1024 * 1024) {
+            showToast('One or more files exceed the 50MB limit', 'error');
+            return;
+          }
         }
-        uploadFile(file);
+        uploadFiles(files);
       }
-    }
+    });
   </script>
 </body>
 </html>

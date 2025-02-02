@@ -1,18 +1,19 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session, flash
 import os
-import json
 import requests
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import sqlite3
-import threading
 import mimetypes
 import io
+from functools import wraps
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['DATABASE'] = 'files.db'
+app.secret_key = 'your_secret_key_here'  # Change this for production!
 
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = '7824643790:AAHEUacWhMqzxpQIFwqNo2pd6vJZkqHB5rY'
@@ -41,12 +42,32 @@ def get_file_type_icon(filename):
             return 'presentation'
     return 'document'
 
+def get_db():
+    db = sqlite3.connect(app.config['DATABASE'])
+    db.row_factory = sqlite3.Row
+    return db
+
 def init_db():
-    with sqlite3.connect(app.config['DATABASE']) as conn:
-        # Only create table if it doesn't exist
+    with get_db() as conn:
+        # Create users table if it doesn't exist
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL
+            )
+        ''')
+        # Check if "is_admin" column exists in the users table; if not, add it.
+        cursor = conn.execute("PRAGMA table_info(users)")
+        user_columns = [row["name"] for row in cursor.fetchall()]
+        if "is_admin" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+        
+        # Create files table if it doesn't exist
         conn.execute('''
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
                 filename TEXT NOT NULL,
                 original_filename TEXT NOT NULL,
                 telegram_file_id TEXT,
@@ -54,33 +75,130 @@ def init_db():
                 upload_date TEXT NOT NULL,
                 file_size INTEGER,
                 file_type TEXT,
-                mime_type TEXT
+                mime_type TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
             )
         ''')
-
-def get_db():
-    db = sqlite3.connect(app.config['DATABASE'])
-    db.row_factory = sqlite3.Row
-    return db
+        # Check if "user_id" column exists in the files table; if not, add it.
+        cursor = conn.execute("PRAGMA table_info(files)")
+        file_columns = [row["name"] for row in cursor.fetchall()]
+        if "user_id" not in file_columns:
+            conn.execute("ALTER TABLE files ADD COLUMN user_id INTEGER")
+        
+        # Create a default admin user if it doesn't exist
+        cur = conn.execute("SELECT * FROM users WHERE username = ?", ("admin",))
+        if not cur.fetchone():
+            admin_password = generate_password_hash("admin123")
+            conn.execute("INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)", ("admin", admin_password, 1))
+            print("Default admin account created (username: admin, password: admin123)")
 
 @app.before_first_request
 def before_first_request():
     init_db()
 
+# ---------------------------
+# Decorators
+# ---------------------------
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            flash("Please log in to access this page.", "warning")
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            flash("Please log in to access this page.", "warning")
+            return redirect(url_for('login'))
+        with get_db() as db:
+            user = db.execute("SELECT * FROM users WHERE id = ?", (session['user_id'],)).fetchone()
+            if not user or user["is_admin"] != 1:
+                flash("You do not have permission to access this page.", "danger")
+                return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# ---------------------------
+# Authentication Routes
+# ---------------------------
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username'].strip()
+        password = request.form['password']
+        if not username or not password:
+            flash("Username and password are required", "danger")
+            return redirect(url_for('register'))
+        hashed_pw = generate_password_hash(password)
+        try:
+            with get_db() as db:
+                db.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, hashed_pw))
+            flash("Registration successful! Please log in.", "success")
+            return redirect(url_for('login'))
+        except sqlite3.IntegrityError:
+            flash("Username already exists", "danger")
+            return redirect(url_for('register'))
+    return render_template('register.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username'].strip()
+        password = request.form['password']
+        with get_db() as db:
+            user = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+            if user and check_password_hash(user['password'], password):
+                session['user_id'] = user['id']
+                session['username'] = user['username']
+                session['is_admin'] = user['is_admin']
+                flash("Logged in successfully", "success")
+                return redirect(url_for('index'))
+            else:
+                flash("Invalid username or password", "danger")
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash("Logged out successfully", "success")
+    return redirect(url_for('login'))
+
+# ---------------------------
+# Main App Routes
+# ---------------------------
 @app.route('/')
+@login_required
 def index():
-    return render_template('index.html')
+    return render_template('index.html', username=session.get('username'))
 
 @app.route('/api/files', methods=['GET'])
+@login_required
 def get_files():
     try:
         with get_db() as db:
-            files = db.execute('SELECT * FROM files ORDER BY upload_date DESC').fetchall()
+            files = db.execute('SELECT * FROM files WHERE user_id = ? ORDER BY upload_date DESC', 
+                               (session['user_id'],)).fetchall()
             return jsonify([dict(file) for file in files])
     except sqlite3.Error as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/storage', methods=['GET'])
+@login_required
+def get_storage():
+    try:
+        with get_db() as db:
+            total = db.execute('SELECT SUM(file_size) as total FROM files WHERE user_id = ?', (session['user_id'],)).fetchone()
+            used = total['total'] if total['total'] is not None else 0
+            return jsonify({'used_bytes': used})
+    except sqlite3.Error as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/upload', methods=['POST'])
+@login_required
 def upload_file():
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
@@ -97,19 +215,18 @@ def upload_file():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], saved_filename)
         file.save(filepath)
 
-        # Get file information
         file_size = os.path.getsize(filepath)
         mime_type, _ = mimetypes.guess_type(filename)
         file_type = get_file_type_icon(filename)
 
         # Upload to Telegram
         with open(filepath, 'rb') as f:
-            files = {'document': f}
+            files_data = {'document': f}
             caption = f"📄 File: {filename}\n📦 Size: {file_size/1024/1024:.2f}MB\n🔤 Type: {mime_type or 'Unknown'}"
             response = requests.post(
                 f'{TELEGRAM_API_URL}/sendDocument',
                 data={'chat_id': TELEGRAM_CHANNEL_ID, 'caption': caption},
-                files=files
+                files=files_data
             )
 
         if response.status_code != 200:
@@ -120,20 +237,18 @@ def upload_file():
         telegram_file_id = result['document']['file_id']
         telegram_message_id = result['message_id']
 
-        # Save file info to database
         with get_db() as db:
             db.execute('''
                 INSERT INTO files (
-                    filename, original_filename, telegram_file_id, telegram_message_id,
+                    user_id, filename, original_filename, telegram_file_id, telegram_message_id,
                     upload_date, file_size, file_type, mime_type
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                saved_filename, filename, telegram_file_id, telegram_message_id,
+                session['user_id'], saved_filename, filename, telegram_file_id, telegram_message_id,
                 datetime.now().isoformat(), file_size, file_type, mime_type
             ))
 
-        # Clean up local file after successful upload
         os.remove(filepath)
 
         return jsonify({
@@ -150,14 +265,14 @@ def upload_file():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/download/<int:file_id>')
+@login_required
 def download_file(file_id):
     try:
         with get_db() as db:
-            file = db.execute('SELECT * FROM files WHERE id = ?', (file_id,)).fetchone()
+            file = db.execute('SELECT * FROM files WHERE id = ? AND user_id = ?', (file_id, session['user_id'])).fetchone()
             if not file:
                 return jsonify({'error': 'File not found'}), 404
 
-            # Get file from Telegram
             response = requests.get(
                 f'{TELEGRAM_API_URL}/getFile',
                 params={'file_id': file['telegram_file_id']}
@@ -169,12 +284,10 @@ def download_file(file_id):
             file_path = response.json()['result']['file_path']
             file_url = f'https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}'
             
-            # Download file from Telegram
             response = requests.get(file_url)
             if response.status_code != 200:
                 return jsonify({'error': 'Failed to download file from Telegram'}), 500
 
-            # Create BytesIO object from response content
             file_data = io.BytesIO(response.content)
             file_data.seek(0)
 
@@ -189,14 +302,14 @@ def download_file(file_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/delete/<int:file_id>', methods=['DELETE'])
+@login_required
 def delete_file(file_id):
     try:
         with get_db() as db:
-            file = db.execute('SELECT * FROM files WHERE id = ?', (file_id,)).fetchone()
+            file = db.execute('SELECT * FROM files WHERE id = ? AND user_id = ?', (file_id, session['user_id'])).fetchone()
             if not file:
                 return jsonify({'error': 'File not found'}), 404
 
-            # Delete from Telegram channel
             response = requests.post(
                 f'{TELEGRAM_API_URL}/deleteMessage',
                 data={
@@ -205,12 +318,8 @@ def delete_file(file_id):
                 }
             )
 
-            # Delete from database regardless of Telegram response
             db.execute('DELETE FROM files WHERE id = ?', (file_id,))
-            
-            # Check Telegram response after database deletion
             if response.status_code != 200:
-                # Log the error but don't fail the request
                 print(f"Warning: Failed to delete message from Telegram: {response.text}")
 
         return jsonify({'message': 'File deleted successfully'})
@@ -218,6 +327,78 @@ def delete_file(file_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ---------------------------
+# Admin Endpoints
+# ---------------------------
+def format_bytes(size):
+    # Returns a human-readable string
+    if size < 1024:
+        return f"{size} Bytes"
+    elif size < 1024 * 1024:
+        return f"{size/1024:.2f} KB"
+    elif size < 1024 * 1024 * 1024:
+        return f"{size/(1024*1024):.2f} MB"
+    else:
+        return f"{size/(1024*1024*1024):.2f} GB"
+
+@app.route('/admin')
+@admin_required
+def admin_panel():
+    return render_template('admin.html')
+
+@app.route('/api/admin/users', methods=['GET'])
+@admin_required
+def get_users():
+    try:
+        with get_db() as db:
+            users = db.execute("SELECT id, username, is_admin FROM users ORDER BY id ASC").fetchall()
+            data = []
+            for user in users:
+                total = db.execute("SELECT SUM(file_size) as total FROM files WHERE user_id = ?", (user["id"],)).fetchone()
+                used = total["total"] if total["total"] is not None else 0
+                data.append({
+                    "id": user["id"],
+                    "username": user["username"],
+                    "used": used,
+                    "used_formatted": format_bytes(used),
+                    "is_admin": user["is_admin"]
+                })
+            return jsonify(data)
+    except sqlite3.Error as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/admin/user/<int:user_id>', methods=['DELETE'])
+@admin_required
+def delete_user(user_id):
+    try:
+        with get_db() as db:
+            if user_id == session.get("user_id"):
+                return jsonify({'error': "You cannot delete your own account"}), 400
+
+            user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            if not user:
+                return jsonify({'error': 'User not found'}), 404
+
+            # Get all files for this user and remove them from Telegram
+            files = db.execute("SELECT * FROM files WHERE user_id = ?", (user_id,)).fetchall()
+            for file in files:
+                resp = requests.post(
+                    f'{TELEGRAM_API_URL}/deleteMessage',
+                    data={
+                        'chat_id': TELEGRAM_CHANNEL_ID,
+                        'message_id': file['telegram_message_id']
+                    }
+                )
+                if resp.status_code != 200:
+                    print(f"Warning: Failed to delete Telegram message {file['telegram_message_id']}: {resp.text}")
+
+            # Delete files from database and then delete the user
+            db.execute("DELETE FROM files WHERE user_id = ?", (user_id,))
+            db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        return jsonify({'message': 'User and associated files deleted successfully'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Default to 5000 if PORT is not set
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)

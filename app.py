@@ -5,7 +5,7 @@ import sqlite3
 import mimetypes
 import io
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone  # Updated import to include timezone
 from functools import wraps
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -278,7 +278,6 @@ def upload_file():
                     session['user_id'], saved_filename, filename, telegram_file_id, telegram_message_id,
                     datetime.now().isoformat(), file_size, file_type, mime_type, thumbnail_filename
                 ))
-            # Remove any temporary file
             os.remove(filepath)
             responses.append({
                 'message': f'{filename} uploaded successfully',
@@ -349,7 +348,6 @@ def delete_file(file_id):
                     'message_id': file['telegram_message_id']
                 }
             )
-            # Remove any share links for this file
             db.execute('DELETE FROM share_links WHERE file_id = ?', (file_id,))
             db.execute('DELETE FROM files WHERE id = ?', (file_id,))
             if file['thumbnail_filename']:
@@ -445,7 +443,7 @@ def expire_share_link(share_id):
         ''', (share_id, session['user_id'])).fetchone()
         if not link:
             return jsonify({'error': 'Share link not found'}), 404
-        now_iso = datetime.now().isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()  # Use offset-aware datetime here
         db.execute('UPDATE share_links SET expiration = ? WHERE id = ?', (now_iso, share_id))
     return jsonify({'message': 'Share link expired', 'share_id': share_id})
 
@@ -466,26 +464,33 @@ def delete_share_link(share_id):
 # Public endpoint to access shared file
 @app.route('/share/<token>')
 def access_share_link(token):
-    with get_db() as db:
-        link = db.execute('SELECT * FROM share_links WHERE token = ?', (token,)).fetchone()
-        if not link:
-            return "Invalid or expired link", 404
-        expiration = link['expiration']
-        if expiration:
-            if datetime.fromisoformat(expiration) < datetime.now():
+    try:
+        with get_db() as db:
+            link = db.execute('SELECT * FROM share_links WHERE token = ?', (token,)).fetchone()
+            if not link:
+                return "Invalid or expired link", 404
+            expiration = link['expiration']
+            # Compare using offset-aware datetime
+            if expiration and datetime.fromisoformat(expiration) < datetime.now(timezone.utc):
                 return "This link has expired", 410
-        file = db.execute('SELECT * FROM files WHERE id = ?', (link['file_id'],)).fetchone()
-        if not file:
-            return "File not found", 404
+            file = db.execute('SELECT * FROM files WHERE id = ?', (link['file_id'],)).fetchone()
+            if not file:
+                return "File not found", 404
         response = requests.get(
             f'{TELEGRAM_API_URL}/getFile',
             params={'file_id': file['telegram_file_id']}
         )
         if response.status_code != 200:
-            return "Failed to retrieve file", 500
-        file_path = response.json()['result']['file_path']
+            error_desc = response.json().get("description", "No description provided")
+            return f"Failed to retrieve file: {error_desc}", 500
+        data = response.json()
+        if 'result' not in data or 'file_path' not in data['result']:
+            return "Failed to retrieve file: Unexpected response structure", 500
+        file_path = data['result']['file_path']
         file_url = f'https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}'
         return redirect(file_url)
+    except Exception as e:
+        return f"An error occurred while retrieving the file: {str(e)}", 500
 
 # ---------------------------
 # Admin Endpoints (unchanged)

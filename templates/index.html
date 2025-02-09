@@ -790,9 +790,11 @@
       }
     });
 
+    // Update share links count on page load by calling loadShareLinks
     document.addEventListener('DOMContentLoaded', () => {
       loadFiles();
       loadStorageUsage();
+      loadShareLinks();
     });
 
     const dropZone = document.body;

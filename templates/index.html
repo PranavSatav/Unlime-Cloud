@@ -62,8 +62,19 @@
       display: none;
     }
     /* Multi-select Toolbar */
-    #multiSelectToolbar { z-index: 1100; }
-
+    #multiSelectToolbar {
+      z-index: 1100;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #1F2937;
+      color: #fff;
+      padding: 1rem;
+      display: none;
+      justify-content: space-between;
+      align-items: center;
+    }
     /* Consolidated Upload Card */
     #uploadCard {
       z-index: 1050;
@@ -267,6 +278,22 @@
     </div>
   </header>
 
+  <!-- Multi-select Toolbar -->
+  <div id="multiSelectToolbar">
+    <span id="selectedCount">0 Selected</span>
+    <div>
+      <button onclick="selectAllFiles()" class="bg-white text-blue-600 font-semibold py-2 px-4 rounded shadow hover:bg-gray-100 transition transform hover:scale-105 mr-4">
+        Select All
+      </button>
+      <button onclick="startDeletion()" class="bg-white text-blue-600 font-semibold py-2 px-4 rounded shadow hover:bg-gray-100 transition transform hover:scale-105 mr-4">
+        Delete Selected
+      </button>
+      <button onclick="exitMultiSelect()" class="bg-white text-blue-600 font-semibold py-2 px-4 rounded shadow hover:bg-gray-100 transition transform hover:scale-105">
+        Cancel
+      </button>
+    </div>
+  </div>
+
   <!-- Consolidated Upload Card -->
   <div id="uploadCard">
     <header>
@@ -451,7 +478,7 @@
 
     function enterMultiSelectMode() {
       multiSelectMode = true;
-      document.getElementById('multiSelectToolbar').classList.remove('hidden');
+      document.getElementById('multiSelectToolbar').style.display = 'flex';
     }
 
     function enterMultiSelectModeManual() {
@@ -461,7 +488,7 @@
     function exitMultiSelect() {
       multiSelectMode = false;
       selectedFiles.clear();
-      document.getElementById('multiSelectToolbar').classList.add('hidden');
+      document.getElementById('multiSelectToolbar').style.display = 'none';
       document.querySelectorAll('.file-card').forEach(card => card.classList.remove('selected'));
     }
 

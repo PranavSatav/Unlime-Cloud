@@ -223,11 +223,13 @@
     }
     #shareLinksModal .modal-content {
       background-color: #fefefe;
-      margin: 10% auto;
+      margin: 5% auto;
       padding: 1.5rem;
       border: 1px solid #888;
       width: 90%;
-      max-width: 600px;
+      max-width: 800px;
+      max-height: 80vh;
+      overflow-y: auto;
       border-radius: 8px;
     }
     #shareLinksModal .close {
@@ -251,6 +253,13 @@
       padding: 0.5rem;
       border: 1px solid #ddd;
       text-align: left;
+      vertical-align: middle;
+    }
+    /* Inline actions buttons */
+    .share-actions {
+      display: inline-flex;
+      gap: 0.25rem;
+      align-items: center;
     }
   </style>
 </head>
@@ -423,7 +432,7 @@
         <div class="p-2 text-center">
           <p class="text-sm font-medium text-gray-800 truncate" title="${file.original_filename}">${file.original_filename}</p>
           <p class="text-xs text-gray-500">${formatFileSize(file.file_size)}</p>
-          <p class="text-xs text-gray-400">${new Date(file.upload_date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+          <p class="text-xs text-gray-400">${new Date(file.upload_date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}</p>
           <div class="mt-2 flex justify-center gap-2">
             <button onclick="downloadFile(event, ${file.id})" class="p-1 bg-blue-50 hover:bg-blue-100 rounded" title="Download">
               <i class="fas fa-download text-blue-600"></i>
@@ -497,7 +506,7 @@
       document.getElementById('selectedCount').textContent = selectedFiles.size + ' Selected';
     }
 
-    // Upload function (same as before)
+    // Upload function
     function uploadFiles(files) {
       const uploadCard = document.getElementById('uploadCard');
       const uploadList = document.getElementById('uploadList');
@@ -567,7 +576,7 @@
       });
     }
 
-    // Deletion functions (same as before)
+    // Deletion functions
     function startDeletion() {
       if (selectedFiles.size === 0) {
         showToast('No files selected', 'error');
@@ -628,18 +637,18 @@
       }
     }
     
-    // Share file: generate share link
+    // Share file: generate share link without alerts
     function shareFile(event, fileId) {
       event.stopPropagation();
       let expires_in = prompt("Enter expiration time in minutes (0 for never expire):", "0");
       if (expires_in === null) return;
       axios.post(`/api/share/${fileId}`, { expires_in: parseInt(expires_in) })
         .then(response => {
-          alert("Share Link:\n" + response.data.share_link);
-          refreshShareLinks(); // refresh the list if modal is open
+          showToast("Share link created and stored in Manage Links", "success");
+          refreshShareLinks();
         })
         .catch(error => {
-          alert("Failed to generate share link: " + (error.response?.data?.error || error.message));
+          showToast("Failed to generate share link: " + (error.response?.data?.error || error.message), "error");
         });
     }
 
@@ -653,13 +662,19 @@
           tbody.innerHTML = '';
           links.forEach(link => {
             const tr = document.createElement('tr');
+            // Format expiration time in 12-hour format if available
+            let expTime = 'Never';
+            if (link.expires_at) {
+              let dt = new Date(link.expires_at);
+              expTime = dt.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+            }
             tr.innerHTML = `
               <td>${link.original_filename}</td>
               <td><a href="${link.share_link}" target="_blank" class="text-blue-600 underline">${link.share_link}</a></td>
-              <td>${link.expires_at ? new Date(link.expires_at).toLocaleString() : 'Never'}</td>
-              <td>
-                <button onclick="copyLink('${link.share_link}')" class="bg-blue-100 text-blue-600 px-2 py-1 rounded mr-1">Copy</button>
-                <button onclick="expireLink(${link.id})" class="bg-yellow-100 text-yellow-600 px-2 py-1 rounded mr-1">Expire</button>
+              <td>${expTime}</td>
+              <td class="share-actions">
+                <button onclick="copyLink('${link.share_link}')" class="bg-blue-100 text-blue-600 px-2 py-1 rounded">Copy</button>
+                <button id="expire-btn-${link.id}" onclick="expireLink(${link.id})" class="bg-yellow-100 text-yellow-600 px-2 py-1 rounded">Expire</button>
                 <button onclick="deleteLink(${link.id})" class="bg-red-100 text-red-600 px-2 py-1 rounded">Delete</button>
               </td>
             `;
@@ -697,7 +712,14 @@
         axios.post(`/api/shared_links/${linkId}/expire`)
           .then(response => {
             showToast(response.data.message);
-            refreshShareLinks();
+            // Change button text to "Expired" and disable it
+            const btn = document.getElementById(`expire-btn-${linkId}`);
+            if (btn) {
+              btn.innerText = 'Expired';
+              btn.disabled = true;
+              btn.classList.remove('bg-yellow-100', 'text-yellow-600');
+              btn.classList.add('bg-gray-200', 'text-gray-600');
+            }
           })
           .catch(error => {
             showToast('Failed to expire link', 'error');

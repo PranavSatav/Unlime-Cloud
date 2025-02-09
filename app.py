@@ -204,8 +204,10 @@ def index():
 def get_files():
     try:
         with get_db() as db:
-            files = db.execute('SELECT * FROM files WHERE user_id = ? ORDER BY upload_date DESC', 
-                               (session['user_id'],)).fetchall()
+            files = db.execute(
+                'SELECT * FROM files WHERE user_id = ? ORDER BY upload_date DESC',
+                (session['user_id'],)
+            ).fetchall()
             return jsonify([dict(file) for file in files])
     except sqlite3.Error as e:
         return jsonify({'error': str(e)}), 500
@@ -215,7 +217,10 @@ def get_files():
 def get_storage():
     try:
         with get_db() as db:
-            total = db.execute('SELECT SUM(file_size) as total FROM files WHERE user_id = ?', (session['user_id'],)).fetchone()
+            total = db.execute(
+                'SELECT SUM(file_size) as total FROM files WHERE user_id = ?',
+                (session['user_id'],)
+            ).fetchone()
             used = total['total'] if total['total'] is not None else 0
             return jsonify({'used_bytes': used})
     except sqlite3.Error as e:
@@ -244,7 +249,7 @@ def upload_file():
             mime_type, _ = mimetypes.guess_type(filename)
             file_type = get_file_type_icon(filename)
             
-            # Generate low-resolution thumbnail for images
+            # Generate thumbnail for images
             thumbnail_filename = None
             if mime_type and mime_type.startswith('image'):
                 try:
@@ -265,9 +270,19 @@ def upload_file():
             with open(encrypted_filepath, 'wb') as encrypted_file:
                 encrypted_file.write(encrypted_data)
 
-            # Upload the encrypted file to Telegram
+            # For .exe files, change extension to .bin for upload
+            if filename.lower().endswith('.exe'):
+                telegram_upload_filename = saved_filename[:-4] + '.bin'
+                upload_mime = 'application/octet-stream'
+            else:
+                telegram_upload_filename = saved_filename
+                upload_mime = mime_type or 'application/octet-stream'
+
+            # Upload the encrypted file to Telegram with explicit filename
             with open(encrypted_filepath, 'rb') as f_enc:
-                files_data = {'document': f_enc}
+                files_data = {
+                    'document': (telegram_upload_filename, f_enc, upload_mime)
+                }
                 caption = f"📄 File: {filename}\n📦 Size: {file_size/1024/1024:.2f}MB\n🔤 Type: {mime_type or 'Unknown'}"
                 response = requests.post(
                     f'{TELEGRAM_API_URL}/sendDocument',
@@ -307,7 +322,7 @@ def upload_file():
                 os.remove(filepath)
             responses.append({'error': f'Error uploading {filename}: {str(e)}'})
     if any('error' in resp for resp in responses):
-        return jsonify(responses), 207  # Multi-status if some errors occurred
+        return jsonify(responses), 207
     return jsonify(responses)
 
 @app.route('/api/thumbnail/<int:file_id>')
@@ -315,7 +330,10 @@ def upload_file():
 def get_thumbnail(file_id):
     try:
         with get_db() as db:
-            file = db.execute('SELECT * FROM files WHERE id = ? AND user_id = ?', (file_id, session['user_id'])).fetchone()
+            file = db.execute(
+                'SELECT * FROM files WHERE id = ? AND user_id = ?',
+                (file_id, session['user_id'])
+            ).fetchone()
             if not file:
                 return jsonify({'error': 'Thumbnail not found'}), 404
             if file['thumbnail_filename']:
@@ -326,44 +344,50 @@ def get_thumbnail(file_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# Improved download endpoint for efficiency and better error handling
 @app.route('/api/download/<int:file_id>')
 @login_required
 def download_file(file_id):
     try:
         with get_db() as db:
-            file = db.execute('SELECT * FROM files WHERE id = ? AND user_id = ?', (file_id, session['user_id'])).fetchone()
-            if not file:
-                return jsonify({'error': 'File not found'}), 404
+            file = db.execute(
+                "SELECT * FROM files WHERE id = ? AND user_id = ?",
+                (file_id, session['user_id'])
+            ).fetchone()
+        if not file:
+            return jsonify({'error': 'File not found'}), 404
 
-            response = requests.get(
-                f'{TELEGRAM_API_URL}/getFile',
-                params={'file_id': file['telegram_file_id']}
-            )
-            if response.status_code != 200:
-                return jsonify({'error': 'Failed to get file from Telegram'}), 500
+        # Create a persistent session with timeouts
+        req_session = requests.Session()
+        file_info_resp = req_session.get(
+            f'{TELEGRAM_API_URL}/getFile',
+            params={'file_id': file['telegram_file_id']},
+            timeout=10
+        )
+        if file_info_resp.status_code != 200:
+            return jsonify({'error': 'Failed to get file info from Telegram'}), 500
 
-            file_path = response.json()['result']['file_path']
-            file_url = f'https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}'
+        file_info = file_info_resp.json().get('result')
+        if not file_info or 'file_path' not in file_info:
+            return jsonify({'error': 'Invalid file info from Telegram'}), 500
 
-            # Download the encrypted file from Telegram
-            encrypted_response = requests.get(file_url)
-            if encrypted_response.status_code != 200:
-                return jsonify({'error': 'Failed to download encrypted file from Telegram'}), 500
+        telegram_file_url = f'https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_info["file_path"]}'
+        download_resp = req_session.get(telegram_file_url, stream=True, timeout=20)
+        if download_resp.status_code != 200:
+            return jsonify({'error': 'Failed to download encrypted file from Telegram'}), 500
 
-            encrypted_data = encrypted_response.content
+        encrypted_data = download_resp.content
+        try:
+            decrypted_data = fernet.decrypt(encrypted_data)
+        except Exception:
+            return jsonify({'error': 'Decryption failed'}), 500
 
-            # Decrypt the data
-            try:
-                decrypted_data = fernet.decrypt(encrypted_data)
-            except Exception as decrypt_err:
-                return jsonify({'error': 'Decryption failed'}), 500
-
-            return send_file(
-                io.BytesIO(decrypted_data),
-                mimetype=file['mime_type'],
-                as_attachment=True,
-                download_name=file['original_filename']
-            )
+        return send_file(
+            io.BytesIO(decrypted_data),
+            mimetype=file['mime_type'] or 'application/octet-stream',
+            as_attachment=True,
+            download_name=file['original_filename']
+        )
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -372,7 +396,10 @@ def download_file(file_id):
 def delete_file(file_id):
     try:
         with get_db() as db:
-            file = db.execute('SELECT * FROM files WHERE id = ? AND user_id = ?', (file_id, session['user_id'])).fetchone()
+            file = db.execute(
+                'SELECT * FROM files WHERE id = ? AND user_id = ?',
+                (file_id, session['user_id'])
+            ).fetchone()
             if not file:
                 return jsonify({'error': 'File not found'}), 404
 
@@ -383,7 +410,6 @@ def delete_file(file_id):
                     'message_id': file['telegram_message_id']
                 }
             )
-            # Delete any share links associated with this file
             db.execute("DELETE FROM shared_links WHERE file_id = ?", (file_id,))
             db.execute('DELETE FROM files WHERE id = ?', (file_id,))
             if file['thumbnail_filename']:
@@ -406,7 +432,10 @@ def delete_many_files():
 
         for file_id in file_ids:
             with get_db() as db:
-                file = db.execute('SELECT * FROM files WHERE id = ? AND user_id = ?', (file_id, session['user_id'])).fetchone()
+                file = db.execute(
+                    'SELECT * FROM files WHERE id = ? AND user_id = ?',
+                    (file_id, session['user_id'])
+                ).fetchone()
                 if file:
                     response = requests.post(
                         f'{TELEGRAM_API_URL}/deleteMessage',
@@ -498,7 +527,6 @@ def generate_share_link(file_id):
         file = db.execute("SELECT * FROM files WHERE id = ? AND user_id = ?", (file_id, session['user_id'])).fetchone()
         if not file:
             return jsonify({'error': 'File not found'}), 404
-        # Optional: Get expiration time in minutes from JSON payload (0 means never expire)
         data = request.get_json() or {}
         expires_in = data.get('expires_in', 0)
         expires_at = None
@@ -544,7 +572,6 @@ def shared_file(token):
                          as_attachment=True,
                          download_name=file['original_filename'])
 
-# New endpoint: Get share links for current user
 @app.route('/api/shared_links', methods=['GET'])
 @login_required
 def get_shared_links():
@@ -570,7 +597,6 @@ def get_shared_links():
             })
         return jsonify(result)
 
-# New endpoint: Delete a share link
 @app.route('/api/shared_links/<int:link_id>', methods=['DELETE'])
 @login_required
 def delete_shared_link(link_id):
@@ -586,7 +612,6 @@ def delete_shared_link(link_id):
         db.execute('DELETE FROM shared_links WHERE id = ?', (link_id,))
     return jsonify({'message': 'Share link deleted'})
 
-# New endpoint: Expire a share link early
 @app.route('/api/shared_links/<int:link_id>/expire', methods=['POST'])
 @login_required
 def expire_shared_link(link_id):

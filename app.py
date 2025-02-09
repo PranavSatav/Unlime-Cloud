@@ -4,11 +4,13 @@ import requests
 import sqlite3
 import mimetypes
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from PIL import Image  # For thumbnail generation
+from cryptography.fernet import Fernet
+import secrets  # For generating random tokens
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
@@ -25,6 +27,10 @@ TELEGRAM_API_URL = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 THUMBNAIL_FOLDER = 'thumbnails'
 os.makedirs(THUMBNAIL_FOLDER, exist_ok=True)
+
+# Hardcoded encryption key (Fernet key, must be 32 url-safe base64-encoded bytes)
+app.config['ENCRYPTION_KEY'] = b"lK5y1cMlvQwKLCMxGzH7U3X3fNuTPrQvSjsDc8zz0YU="
+fernet = Fernet(app.config['ENCRYPTION_KEY'])
 
 def get_file_type_icon(filename):
     mime_type, _ = mimetypes.guess_type(filename)
@@ -90,6 +96,18 @@ def init_db():
             conn.execute("ALTER TABLE files ADD COLUMN user_id INTEGER")
         if "thumbnail_filename" not in file_columns:
             conn.execute("ALTER TABLE files ADD COLUMN thumbnail_filename TEXT")
+        
+        # Create shared_links table for file sharing
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS shared_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id INTEGER NOT NULL,
+                token TEXT UNIQUE NOT NULL,
+                expires_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(file_id) REFERENCES files(id)
+            )
+        ''')
         
         # Create a default admin user if it doesn't exist
         cur = conn.execute("SELECT * FROM users WHERE username = ?", ("admin",))
@@ -238,9 +256,18 @@ def upload_file():
                 except Exception as thumb_err:
                     print(f"Thumbnail generation failed for {filename}: {thumb_err}")
 
-            # Upload file to Telegram
-            with open(filepath, 'rb') as f:
-                files_data = {'document': f}
+            # Encrypt the file before uploading to Telegram
+            with open(filepath, 'rb') as original_file:
+                original_data = original_file.read()
+            encrypted_data = fernet.encrypt(original_data)
+            encrypted_filename = f"enc_{saved_filename}"
+            encrypted_filepath = os.path.join(app.config['UPLOAD_FOLDER'], encrypted_filename)
+            with open(encrypted_filepath, 'wb') as encrypted_file:
+                encrypted_file.write(encrypted_data)
+
+            # Upload the encrypted file to Telegram
+            with open(encrypted_filepath, 'rb') as f_enc:
+                files_data = {'document': f_enc}
                 caption = f"📄 File: {filename}\n📦 Size: {file_size/1024/1024:.2f}MB\n🔤 Type: {mime_type or 'Unknown'}"
                 response = requests.post(
                     f'{TELEGRAM_API_URL}/sendDocument',
@@ -249,6 +276,7 @@ def upload_file():
                 )
             if response.status_code != 200:
                 os.remove(filepath)
+                os.remove(encrypted_filepath)
                 responses.append({'error': f'Failed to upload {filename} to Telegram'})
                 continue
             result = response.json()['result']
@@ -266,6 +294,7 @@ def upload_file():
                     datetime.now().isoformat(), file_size, file_type, mime_type, thumbnail_filename
                 ))
             os.remove(filepath)
+            os.remove(encrypted_filepath)
             responses.append({
                 'message': f'{filename} uploaded successfully',
                 'filename': filename,
@@ -315,7 +344,26 @@ def download_file(file_id):
 
             file_path = response.json()['result']['file_path']
             file_url = f'https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}'
-            return redirect(file_url)
+
+            # Download the encrypted file from Telegram
+            encrypted_response = requests.get(file_url)
+            if encrypted_response.status_code != 200:
+                return jsonify({'error': 'Failed to download encrypted file from Telegram'}), 500
+
+            encrypted_data = encrypted_response.content
+
+            # Decrypt the data
+            try:
+                decrypted_data = fernet.decrypt(encrypted_data)
+            except Exception as decrypt_err:
+                return jsonify({'error': 'Decryption failed'}), 500
+
+            return send_file(
+                io.BytesIO(decrypted_data),
+                mimetype=file['mime_type'],
+                as_attachment=True,
+                download_name=file['original_filename']
+            )
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -335,6 +383,8 @@ def delete_file(file_id):
                     'message_id': file['telegram_message_id']
                 }
             )
+            # Delete any share links associated with this file
+            db.execute("DELETE FROM shared_links WHERE file_id = ?", (file_id,))
             db.execute('DELETE FROM files WHERE id = ?', (file_id,))
             if file['thumbnail_filename']:
                 thumbnail_path = os.path.join(THUMBNAIL_FOLDER, file['thumbnail_filename'])
@@ -362,6 +412,7 @@ def delete_many_files():
                         f'{TELEGRAM_API_URL}/deleteMessage',
                         data={'chat_id': TELEGRAM_CHANNEL_ID, 'message_id': file['telegram_message_id']}
                     )
+                    db.execute("DELETE FROM shared_links WHERE file_id = ?", (file_id,))
                     db.execute('DELETE FROM files WHERE id = ?', (file_id,))
                     if file['thumbnail_filename']:
                         thumbnail_path = os.path.join(THUMBNAIL_FOLDER, file['thumbnail_filename'])
@@ -371,9 +422,6 @@ def delete_many_files():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# ---------------------------
-# Admin Endpoints (unchanged)
-# ---------------------------
 def format_bytes(size):
     if size < 1024:
         return f"{size} Bytes"
@@ -433,11 +481,126 @@ def delete_user(user_id):
                 )
                 if resp.status_code != 200:
                     print(f"Warning: Failed to delete Telegram message: {resp.text}")
+            db.execute("DELETE FROM shared_links WHERE file_id IN (SELECT id FROM files WHERE user_id = ?)", (user_id,))
             db.execute("DELETE FROM files WHERE user_id = ?", (user_id,))
             db.execute("DELETE FROM users WHERE id = ?", (user_id,))
         return jsonify({'message': 'User and associated files deleted successfully'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# ---------------------------
+# File Sharing Endpoints
+# ---------------------------
+@app.route('/api/share/<int:file_id>', methods=['POST'])
+@login_required
+def generate_share_link(file_id):
+    with get_db() as db:
+        file = db.execute("SELECT * FROM files WHERE id = ? AND user_id = ?", (file_id, session['user_id'])).fetchone()
+        if not file:
+            return jsonify({'error': 'File not found'}), 404
+        # Optional: Get expiration time in minutes from JSON payload (0 means never expire)
+        data = request.get_json() or {}
+        expires_in = data.get('expires_in', 0)
+        expires_at = None
+        if expires_in:
+            expires_at = (datetime.now() + timedelta(minutes=int(expires_in))).isoformat()
+        token = secrets.token_urlsafe(16)
+        db.execute("INSERT INTO shared_links (file_id, token, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                   (file_id, token, expires_at, datetime.now().isoformat()))
+        share_link = url_for('shared_file', token=token, _external=True)
+        return jsonify({'share_link': share_link, 'expires_at': expires_at})
+
+@app.route('/share/<token>')
+def shared_file(token):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM shared_links WHERE token = ?", (token,)).fetchone()
+        if not row:
+            return "Invalid or expired link", 404
+        if row['expires_at']:
+            expires_at = datetime.fromisoformat(row['expires_at'])
+            if datetime.now() > expires_at:
+                return "Link has expired", 404
+        file = db.execute("SELECT * FROM files WHERE id = ?", (row['file_id'],)).fetchone()
+        if not file:
+            return "File not found", 404
+        response = requests.get(
+            f'{TELEGRAM_API_URL}/getFile',
+            params={'file_id': file['telegram_file_id']}
+        )
+        if response.status_code != 200:
+            return "Failed to get file from Telegram", 500
+        file_path = response.json()['result']['file_path']
+        file_url = f'https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}'
+        encrypted_response = requests.get(file_url)
+        if encrypted_response.status_code != 200:
+            return "Failed to download file", 500
+        encrypted_data = encrypted_response.content
+        try:
+            decrypted_data = fernet.decrypt(encrypted_data)
+        except Exception as e:
+            return "Decryption failed", 500
+        return send_file(io.BytesIO(decrypted_data),
+                         mimetype=file['mime_type'],
+                         as_attachment=True,
+                         download_name=file['original_filename'])
+
+# New endpoint: Get share links for current user
+@app.route('/api/shared_links', methods=['GET'])
+@login_required
+def get_shared_links():
+    with get_db() as db:
+        links = db.execute('''
+            SELECT sl.id, sl.token, sl.expires_at, sl.created_at, f.original_filename, f.id as file_id
+            FROM shared_links sl
+            JOIN files f ON sl.file_id = f.id
+            WHERE f.user_id = ?
+            ORDER BY sl.created_at DESC
+        ''', (session['user_id'],)).fetchall()
+        result = []
+        for link in links:
+            share_link = url_for('shared_file', token=link['token'], _external=True)
+            result.append({
+                'id': link['id'],
+                'file_id': link['file_id'],
+                'original_filename': link['original_filename'],
+                'token': link['token'],
+                'share_link': share_link,
+                'expires_at': link['expires_at'],
+                'created_at': link['created_at']
+            })
+        return jsonify(result)
+
+# New endpoint: Delete a share link
+@app.route('/api/shared_links/<int:link_id>', methods=['DELETE'])
+@login_required
+def delete_shared_link(link_id):
+    with get_db() as db:
+        link = db.execute('''
+            SELECT sl.id 
+            FROM shared_links sl
+            JOIN files f ON sl.file_id = f.id
+            WHERE sl.id = ? AND f.user_id = ?
+        ''', (link_id, session['user_id'])).fetchone()
+        if not link:
+            return jsonify({'error': 'Link not found'}), 404
+        db.execute('DELETE FROM shared_links WHERE id = ?', (link_id,))
+    return jsonify({'message': 'Share link deleted'})
+
+# New endpoint: Expire a share link early
+@app.route('/api/shared_links/<int:link_id>/expire', methods=['POST'])
+@login_required
+def expire_shared_link(link_id):
+    with get_db() as db:
+        link = db.execute('''
+            SELECT sl.id 
+            FROM shared_links sl
+            JOIN files f ON sl.file_id = f.id
+            WHERE sl.id = ? AND f.user_id = ?
+        ''', (link_id, session['user_id'])).fetchone()
+        if not link:
+            return jsonify({'error': 'Link not found'}), 404
+        db.execute('UPDATE shared_links SET expires_at = ? WHERE id = ?', (datetime.now().isoformat(), link_id))
+    return jsonify({'message': 'Link expired'})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
